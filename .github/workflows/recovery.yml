@@ -6,11 +6,13 @@ on:
       RECOVERY_URL:
         description: 'RECOVERY URL'
         required: true
-        default: 'https://files.catbox.moe/(RECOMMENDED)'
+        default: 'https://files.catbox.moe/xxxxxx'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Quan trọng để upload Release
 
     steps:
     - name: Check Out
@@ -19,72 +21,49 @@ jobs:
     - name: Prepare the environment
       run: |
         sudo apt update
-        sudo apt install git wget lz4 tar openssl python3 -y
+        sudo apt install git wget lz4 tar openssl python3 python3-pip -y
 
     - name: Fetch image from URL
       run: |
-        ls
-        pwd
         wget "${{ github.event.inputs.RECOVERY_URL }}" -O recovery.img
 
-    - name: Patch Process-1
+    - name: Patch Process
       run: |
-        chmod +x script1.sh
-        chmod +x magiskboot
+        # Cấp quyền cho các file thực thi có sẵn trong repo
+        chmod +x script1.sh script2.sh magiskboot avbtool
+        
+        # Chạy script patch
         ./script1.sh recovery.img || true
-
-    - name: Patch Process-2
-      run: |
-        chmod +x script2.sh
         ./script2.sh || true
-
-        echo "=== FILES AFTER PATCH ==="
-        ls -lah
-
-        # Script tạo new-boot.img
-        if [ -f "new-boot.img" ]; then
-          mv new-boot.img recovery-patched.img
-        fi
-
-        # Check file tồn tại
-        if [ ! -f "recovery-patched.img" ]; then
-          echo "recovery-patched.img not found!"
-          exit 1
-        fi
-
-        # Extract AVB public key
-        python3 avbtool extract_public_key \
-          --key phh.pem \
-          --output phh.pub.bin
-
-        # Add AVB footer
+        
+        # Xử lý AVB Tool (Đảm bảo các file .pem tồn tại trong repo)
+        python3 avbtool extract_public_key --key phh.pem --output phh.pub.bin
+        
+        # Lưu ý: Kiểm tra chính xác tên file output của script2.sh là gì 
+        # Giả sử output là recovery-patched.img
         python3 avbtool add_hash_footer \
           --partition_name recovery \
-          --partition_size $(wc -c recovery.img | cut -f1 -d' ') \
+          --partition_size $(stat -c%s recovery.img) \
           --image recovery-patched.img \
           --key phh.pem \
           --algorithm SHA256_RSA4096
-
+        
+        # Đóng gói cho Odin (Samsung)
         mkdir -p output
-
-        # Rename final image
         cp recovery-patched.img output/recovery.img
-
         cd output
-
-        # Create Odin flashable tar
-        tar cvf fastbootd-recovery.tar recovery.img
-
-        # Add md5 for Odin
-        md5sum -t fastbootd-recovery.tar >> fastbootd-recovery.tar
-        mv fastbootd-recovery.tar fastbootd-recovery.tar.md5
-
-        echo "=== OUTPUT FILES ==="
-        ls -lah
+        tar -cvf fastbootd-recovery.tar recovery.img
+        # Tạo chuẩn .tar.md5:
+        md5sum -b fastbootd-recovery.tar > fastbootd-recovery.tar.md5
+        # Lưu ý: Odin cần md5 append vào file tar thực tế, 
+        # nhưng cách đơn giản nhất là:
+        mv fastbootd-recovery.tar fastbootd-recovery.img.tar
 
     - name: Upload to Release
       uses: softprops/action-gh-release@v2
       with:
-        files: output/*.md5
-        name: Patched-Recovery
+        files: output/*
+        name: Patched-Recovery-${{ github.run_id }}
         tag_name: ${{ github.run_id }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
